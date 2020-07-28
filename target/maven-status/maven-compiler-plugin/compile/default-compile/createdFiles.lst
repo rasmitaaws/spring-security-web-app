@@ -1,0 +1,11 @@
+com\microsoft\azure\springsecuritywebapp\AppConfiguration.class
+com\microsoft\azure\springsecuritywebapp\OAuthConstants.class
+com\microsoft\azure\springsecuritywebapp\SpringSecurityWebAppApplication.class
+com\microsoft\azure\springsecuritywebapp\BMCRestTestController.class
+com\microsoft\azure\springsecuritywebapp\RemedyIncidentHelper.class
+com\microsoft\azure\springsecuritywebapp\TokenCacheAspect.class
+com\microsoft\azure\springsecuritywebapp\model\IncidentDetails.class
+com\microsoft\azure\springsecuritywebapp\HttpClientHelper.class
+com\microsoft\azure\springsecuritywebapp\SecurePageController.class
+com\microsoft\azure\springsecuritywebapp\JsonUtil.class
+com\microsoft\azure\springsecuritywebapp\DateUtil.class

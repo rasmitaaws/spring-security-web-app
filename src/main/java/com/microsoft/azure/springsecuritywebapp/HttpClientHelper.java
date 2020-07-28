@@ -1,0 +1,451 @@
+// Copyright (c) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License.
+
+package com.microsoft.azure.springsecuritywebapp;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+
+import javax.naming.ServiceUnavailableException;
+
+import org.apache.http.HttpResponse;
+import org.apache.http.client.ClientProtocolException;
+import org.apache.http.client.entity.UrlEncodedFormEntity;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.message.BasicNameValuePair;
+import org.apache.http.protocol.HTTP;
+import org.apache.http.util.EntityUtils;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.json.simple.parser.JSONParser;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
+
+import com.microsoft.aad.msal4j.AuthorizationCodeParameters;
+import com.microsoft.aad.msal4j.ClientCredentialFactory;
+import com.microsoft.aad.msal4j.ConfidentialClientApplication;
+import com.microsoft.aad.msal4j.IAuthenticationResult;
+import com.microsoft.aad.msal4j.IClientCredential;
+
+@Component
+class HttpClientHelper {
+	
+	private final Logger LOGGER = LoggerFactory.getLogger(this.getClass()); //NOSONAR
+	
+	private HttpClientHelper() {
+	}
+
+	String getResponseStringFromConn(HttpURLConnection conn) throws IOException { //NOSONAR
+
+		BufferedReader reader;
+		if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
+			reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+		} else {
+			reader = new BufferedReader(new InputStreamReader(conn.getErrorStream()));
+		}
+		StringBuilder stringBuilder = new StringBuilder();
+		String line;
+		while ((line = reader.readLine()) != null) {
+			stringBuilder.append(line);
+		}
+
+		return stringBuilder.toString();
+	}
+
+	static JSONObject processResponse(int responseCode, String response) throws JSONException {
+
+		JSONObject responseJson = new JSONObject();
+		responseJson.put("responseCode", responseCode);
+
+		if (response.equalsIgnoreCase("")) {
+			responseJson.put("responseMsg", "");
+		} else {
+			responseJson.put("responseMsg", new JSONObject(response));
+		}
+		return responseJson;
+	}
+
+	 String getAuth(String code, String currentUri) {  //NOSONAR
+		ConfidentialClientApplication app = null;
+
+		Set<String> scopes = new HashSet<String>();
+		scopes.add("https://graph.microsoft.com/.default");
+		String token = null;
+		try {
+			token = getAuthResultByAuthCode(code, currentUri, scopes);
+		} catch (Throwable e) {
+			LOGGER.debug(e.getMessage());
+		}
+
+		return token;
+	}
+
+	String getAuthResultByAuthCode(String authorizationCode, String currentUri, Set<String> scopes)  //NOSONAR
+			throws Throwable {
+
+		IAuthenticationResult result=null;
+		ConfidentialClientApplication app = null;
+		try {
+			IClientCredential credential = ClientCredentialFactory
+					.createFromSecret("Y0ufVcvSAc4s.8ojYQb2_Ba1R80~2V.C3Z");
+
+			try {
+				app = ConfidentialClientApplication.builder("04812a6a-a5cf-4004-94fe-22a4a11c6134", credential)
+						.authority("https://login.microsoftonline.com/" + "ac26cf21-c02e-433a-8cca-237e1afccbd1" + "/")
+						.build();
+			} catch (MalformedURLException e) {
+				System.out.println(e.getMessage());
+			}
+
+			AuthorizationCodeParameters parameters = AuthorizationCodeParameters
+					.builder(authorizationCode, new URI("https://localhost:8443/msal4jsample/getChatDetails"))
+					.scopes(scopes).build();
+			if(app!=null)
+			{
+			Future<IAuthenticationResult> future = app.acquireToken(parameters);
+			result = future.get();
+			}
+			
+		} catch (ExecutionException e) {
+			LOGGER.debug(e.getMessage());  //NOSONAR
+			throw e.getCause();
+		}
+
+		if (result == null) {
+			throw new ServiceUnavailableException("authentication result was null");
+		}
+
+		return result.accessToken();
+	}
+
+	public  String getAccessToken(String grantType, String authorizationCode) {  //NOSONAR
+		HttpPost post = new HttpPost(
+				"https://login.microsoftonline.com/ac26cf21-c02e-433a-8cca-237e1afccbd1/oauth2/v2.0/token");
+		String scope = "https://graph.microsoft.com/.default";
+
+		Map<String, String> map = new HashMap<String, String>();
+
+		List<BasicNameValuePair> parametersBody = new ArrayList<BasicNameValuePair>();
+
+		parametersBody.add(new BasicNameValuePair(OAuthConstants.GRANT_TYPE, grantType));
+
+		parametersBody.add(new BasicNameValuePair(OAuthConstants.CODE, authorizationCode));
+
+		parametersBody.add(new BasicNameValuePair(OAuthConstants.CLIENT_ID, "04812a6a-a5cf-4004-94fe-22a4a11c6134"));
+
+		if (isValid("Y0ufVcvSAc4s.8ojYQb2_Ba1R80~2V.C3Z")) {
+			parametersBody
+					.add(new BasicNameValuePair(OAuthConstants.CLIENT_SECRET, "Y0ufVcvSAc4s.8ojYQb2_Ba1R80~2V.C3Z"));
+		}
+
+		parametersBody.add(new BasicNameValuePair(OAuthConstants.REDIRECT_URI,
+				"https://localhost:8443/msal4jsample/getChatDetails"));
+
+		if (isValid(scope)) {
+			parametersBody.add(new BasicNameValuePair(OAuthConstants.SCOPE, scope));
+		}
+
+		DefaultHttpClient client = new DefaultHttpClient();
+		HttpResponse response = null;
+		String accessToken = null;
+
+		String refreshToken = null;
+		try {
+			post.setEntity(new UrlEncodedFormEntity(parametersBody, HTTP.UTF_8));
+
+			response = client.execute(post);
+			int code = response.getStatusLine().getStatusCode();
+
+			map = handleResponse(response);
+			accessToken = map.get(OAuthConstants.ACCESS_TOKEN);
+			refreshToken = map.get(OAuthConstants.REFRESH_TOKEN);
+		} catch (ClientProtocolException e) {
+			LOGGER.debug(e.getMessage()); //NOSONAR
+			throw new RuntimeException(e.getMessage());
+		} catch (IOException e) {
+			LOGGER.debug(e.getMessage()); //NOSONAR
+			throw new RuntimeException(e.getMessage());
+		}finally
+		{
+			
+				client.close();
+			
+		}
+
+		return accessToken;
+	}
+
+	public String getAccessForToken(String grantType, String authorizationCode) {
+		HttpPost post = new HttpPost(
+				"https://login.microsoftonline.com/ac26cf21-c02e-433a-8cca-237e1afccbd1/oauth2/v2.0/token");
+		String scope = "https://graph.microsoft.com/.default";
+
+		Map<String, String> map = new HashMap<String, String>();
+
+		List<BasicNameValuePair> parametersBody = new ArrayList<BasicNameValuePair>();
+
+		parametersBody.add(new BasicNameValuePair(OAuthConstants.GRANT_TYPE, grantType));
+
+
+		parametersBody.add(new BasicNameValuePair(OAuthConstants.CLIENT_ID, "04812a6a-a5cf-4004-94fe-22a4a11c6134"));
+
+		if (isValid("Y0ufVcvSAc4s.8ojYQb2_Ba1R80~2V.C3Z")) {
+			parametersBody
+					.add(new BasicNameValuePair(OAuthConstants.CLIENT_SECRET, "Y0ufVcvSAc4s.8ojYQb2_Ba1R80~2V.C3Z"));
+		}
+
+
+		if (isValid(scope)) {
+			parametersBody.add(new BasicNameValuePair(OAuthConstants.SCOPE, scope));
+		}
+
+		DefaultHttpClient client = new DefaultHttpClient();
+		HttpResponse response = null;
+		String accessToken = null;
+
+		String refreshToken = null;
+		try {
+			post.setEntity(new UrlEncodedFormEntity(parametersBody, HTTP.UTF_8));
+
+			response = client.execute(post);
+			int code = response.getStatusLine().getStatusCode();
+
+			map = handleResponse(response);
+			accessToken = map.get(OAuthConstants.ACCESS_TOKEN);
+			refreshToken = map.get(OAuthConstants.REFRESH_TOKEN);
+
+		} catch (ClientProtocolException e) {
+			// TODO Auto-generated catch block
+			LOGGER.debug(e.getMessage()); //NOSONAR
+			throw new RuntimeException(e.getMessage());
+		} catch (IOException e) {
+			LOGGER.debug(e.getMessage()); //NOSONAR
+			throw new RuntimeException(e.getMessage());
+		}
+		finally
+		{
+		
+				client.close();
+			
+		}
+
+		return accessToken;
+	}
+
+	public static boolean isValid(String str) {
+		return (str != null && str.trim().length() > 0);
+	}
+
+	public  Map handleResponse(HttpResponse response) {
+		String contentType = OAuthConstants.JSON_CONTENT;
+		if (response.getEntity().getContentType() != null) {
+			contentType = response.getEntity().getContentType().getValue();
+		}
+		if (contentType.contains(OAuthConstants.JSON_CONTENT)) {
+			return handleJsonResponse(response);
+		}
+		if (contentType.contains(OAuthConstants.JSON_CONTENT)) {
+			return handleJsonResponse(response);
+		} else {
+			// Unsupported Content type
+			throw new RuntimeException("Cannot handle " + contentType
+					+ " content type. Supported content types include JSON, XML and URLEncoded");
+		}
+
+	}
+
+	@SuppressWarnings("unchecked")
+	public  Map handleJsonResponse(HttpResponse response) {
+		Map<String, String> oauthLoginResponse = null;
+		// String contentType =
+		// response.getEntity().getContentType().getValue();
+		try {
+			oauthLoginResponse = (Map<String, String>) new JSONParser()
+					.parse(EntityUtils.toString(response.getEntity()));
+			// TODO Auto-generated catch block
+		} catch (Exception e) {
+			LOGGER.debug(e.getMessage()); //NOSONAR
+			throw new RuntimeException(e.getMessage());
+		}
+		System.out.println();
+		System.out.println("********** Response Received **********");
+		for (Map.Entry<String, String> entry : oauthLoginResponse.entrySet()) {
+			System.out.println(String.format("  %s = %s", entry.getKey(), entry.getValue()));
+		}
+		return oauthLoginResponse;
+	}
+
+	
+	
+
+	public static void parseXMLDoc(Element element, Document doc, Map<String, String> oauthResponse) {
+		NodeList child = null;
+		if (element == null) {
+			child = doc.getChildNodes();
+
+		} else {
+			child = element.getChildNodes();
+		}
+		for (int j = 0; j < child.getLength(); j++) {
+			if (child.item(j).getNodeType() == org.w3c.dom.Node.ELEMENT_NODE) {
+				org.w3c.dom.Element childElement = (org.w3c.dom.Element) child.item(j);
+				if (childElement.hasChildNodes()) {
+					System.out.println(childElement.getTagName() + " : " + childElement.getTextContent());
+					oauthResponse.put(childElement.getTagName(), childElement.getTextContent());
+					parseXMLDoc(childElement, null, oauthResponse);
+				}
+
+			}
+		}
+	}
+
+	/**
+	 * Refresh an expired access token by using the refresh token
+	 * 
+	 * @param oauthDetails
+	 * @return
+	 */
+	public  Map<String, String> refreshAccessToken(String refreshToken) {
+		HttpPost post = new HttpPost(
+				"https://login.microsoftonline.com/ac26cf21-c02e-433a-8cca-237e1afccbd1/oauth2/v2.0/token");
+		String clientId = "04812a6a-a5cf-4004-94fe-22a4a11c6134";
+		String clientSecret = "Y0ufVcvSAc4s.8ojYQb2_Ba1R80~2V.C3Z";
+		String scope = "https://graph.microsoft.com/.default";
+		Map<String, String> map = new HashMap<String, String>();
+
+		if (!isValid(refreshToken)) {
+			throw new RuntimeException("Please provide valid refresh token in config file");
+		}
+
+		List<BasicNameValuePair> parametersBody = new ArrayList<BasicNameValuePair>();
+
+		parametersBody.add(new BasicNameValuePair(OAuthConstants.GRANT_TYPE, OAuthConstants.REFRESH_TOKEN));
+
+		parametersBody.add(new BasicNameValuePair(OAuthConstants.REFRESH_TOKEN, refreshToken));
+
+		if (isValid(clientId)) {
+			parametersBody.add(new BasicNameValuePair(OAuthConstants.CLIENT_ID, clientId));
+		}
+
+		if (isValid(clientSecret)) {
+			parametersBody.add(new BasicNameValuePair(OAuthConstants.CLIENT_SECRET, clientSecret));
+		}
+
+		if (isValid(scope)) {
+			parametersBody.add(new BasicNameValuePair(OAuthConstants.SCOPE, scope));
+		}
+
+		DefaultHttpClient client = new DefaultHttpClient(); //NOSONAR
+		HttpResponse response = null;
+		try {
+			post.setEntity(new UrlEncodedFormEntity(parametersBody, HTTP.UTF_8));
+
+			response = client.execute(post);
+			int code = response.getStatusLine().getStatusCode();
+
+			map = handleResponse(response); //NOSONAR
+
+		} catch (ClientProtocolException e) {
+			LOGGER.debug(e.getMessage()); //NOSONAR
+			throw new RuntimeException(e.getMessage());
+		} catch (IOException e) {
+			LOGGER.debug(e.getMessage());
+			throw new RuntimeException(e.getMessage());
+		}
+		finally
+		{
+				client.close();
+			
+		}
+		return map;
+	}
+
+	public  String getAccessTokenForClientCredential(String grantType, String authorizationCode) {
+		HttpPost post = new HttpPost(
+				"https://login.microsoftonline.com/ac26cf21-c02e-433a-8cca-237e1afccbd1/oauth2/v2.0/token");
+		String scope = "https://graph.microsoft.com/.default";
+
+		Map<String, String> map = new HashMap<String, String>();
+
+		List<BasicNameValuePair> parametersBody = new ArrayList<BasicNameValuePair>();
+
+		parametersBody.add(new BasicNameValuePair(OAuthConstants.GRANT_TYPE, grantType));
+
+		/*
+		 * parametersBody.add(new BasicNameValuePair(OAuthConstants.CODE,
+		 * authorizationCode));
+		 */
+
+		parametersBody.add(new BasicNameValuePair(OAuthConstants.CLIENT_ID, "04812a6a-a5cf-4004-94fe-22a4a11c6134"));
+
+		if (isValid("Y0ufVcvSAc4s.8ojYQb2_Ba1R80~2V.C3Z")) {
+			parametersBody
+					.add(new BasicNameValuePair(OAuthConstants.CLIENT_SECRET, "Y0ufVcvSAc4s.8ojYQb2_Ba1R80~2V.C3Z"));
+		}
+
+		/*
+		 * parametersBody.add(new BasicNameValuePair(OAuthConstants.REDIRECT_URI,
+		 * "https://localhost:8443/msal4jsample/getChatDetails"));
+		 */
+
+		if (isValid(scope)) {
+			parametersBody.add(new BasicNameValuePair(OAuthConstants.SCOPE, scope));
+		}
+
+		DefaultHttpClient client = new DefaultHttpClient();
+		HttpResponse response = null;
+		String accessToken = null;
+
+		String refreshToken = null;
+		try {
+			post.setEntity(new UrlEncodedFormEntity(parametersBody, HTTP.UTF_8));
+
+			response = client.execute(post);
+			int code = response.getStatusLine().getStatusCode();
+
+			map = handleResponse(response);
+			accessToken = map.get(OAuthConstants.ACCESS_TOKEN);
+			refreshToken = map.get(OAuthConstants.REFRESH_TOKEN);
+
+			// System.out.println(refreshToken+"REFRESSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS");
+
+			/*
+			 * if(!isValid(accessToken) && isValid(refreshToken)) { accessToken
+			 * =refreshToken; map = refreshAccessToken(refreshToken); accessToken =
+			 * map.get(OAuthConstants.ACCESS_TOKEN); }
+			 */
+
+		} catch (ClientProtocolException e) {
+			LOGGER.debug(""+e.getMessage());
+			throw new RuntimeException(e.getMessage());
+		} catch (IOException e) {
+			LOGGER.debug(""+e.getMessage());
+			throw new RuntimeException(e.getMessage());
+		}
+		finally
+		{
+			if(client!=null)
+			client.close();
+		}
+
+		return accessToken;
+	}
+	
+}
